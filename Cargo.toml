@@ -1,6 +1,6 @@
 [package]
 name = "stylus-chainlink-price-feeds"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Helper functions to get the price of various assets in Chainlink's price feeds portfolio on Robinhood for Stylus."
@@ -8,7 +8,13 @@ homepage = "https://github.com/fluidity-money/bobcat-chainlink-price-feeds"
 repository = "https://github.com/fluidity-money/bobcat-chainlink-price-feeds"
 
 [dependencies]
-bobcat-call = { version = ">=0.9.6", default-features = false }
+bobcat-call = { version = ">=0.9.6", default-features = false, optional = true, features = ["dont-define-symbols"] }
 bobcat-interfaces = { version = ">=0.9.6", default-features = false }
-bobcat-maths = { version = ">=0.9.6", default-features = false }
+bobcat-maths = { version = ">=0.9.6", default-features = false, optional = true }
 bobcat-cd = { version = ">=0.9.6", default-features = false }
+stylus-sdk = { version = ">=0.10.0", default-features = false, optional = true }
+
+[features]
+default = ["stylus-sdk"]
+stylus-sdk = ["dep:stylus-sdk"]
+bobcat-sdk = ["dep:bobcat-call", "dep:bobcat-maths"]

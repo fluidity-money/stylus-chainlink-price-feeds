@@ -1,12 +1,31 @@
 #![no_std]
 
+#[cfg(feature = "bobcat-sdk")]
 use bobcat_maths::U;
 
 use bobcat_cd::address;
 
+#[allow(unused)]
 use bobcat_interfaces::chainlink_price_feed::SEL_LATEST_ROUND_DATA;
 
+#[cfg(feature = "bobcat-sdk")]
 use bobcat_call::static_call_word;
+
+#[cfg(feature = "stylus-sdk")]
+extern crate alloc;
+
+#[cfg(feature = "stylus-sdk")]
+use alloc::vec::Vec;
+
+#[cfg(feature = "stylus-sdk")]
+use stylus_sdk::{
+    alloy_primitives::{Address, U256},
+    call::static_call,
+    prelude::{Host, StaticCallContext, calls::errors::Error as StylusError},
+};
+
+#[cfg(feature = "stylus-sdk")]
+use core::fmt::{Display, Formatter, Result as FmtResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PriceFeed {
@@ -131,6 +150,68 @@ impl PriceFeed {
             Self::UsoUsd => address!(b"75a9c76Ef439e2C7c2E5a34Ab105EcFe3766431c"),
         }
     }
+
+    pub const fn decimals(self) -> u8 {
+        match self {
+            Self::BtcUsd
+            | Self::EthUsd
+            | Self::LinkUsd
+            | Self::BtcBUsd
+            | Self::CbbtcUsd
+            | Self::LbtcUsd
+            | Self::WbtcUsd
+            | Self::UsdcUsd
+            | Self::UsdtUsd
+            | Self::UsdsUsd
+            | Self::UsdeUsd
+            | Self::UsdgUsd
+            | Self::EurcUsd
+            | Self::EnaUsd
+            | Self::WeethUsd
+            | Self::WstethUsd
+            | Self::SyrupusdcUsd
+            | Self::AaplUsd
+            | Self::AmdUsd
+            | Self::AmznUsd
+            | Self::AsmlUsd
+            | Self::BabaUsd
+            | Self::ClskUsd
+            | Self::CoinUsd
+            | Self::CrclUsd
+            | Self::CrwvUsd
+            | Self::DellUsd
+            | Self::EwyUsd
+            | Self::GmeUsd
+            | Self::GooglUsd
+            | Self::IntcUsd
+            | Self::IonqUsd
+            | Self::MetaUsd
+            | Self::MsftUsd
+            | Self::MstrUsd
+            | Self::MuUsd
+            | Self::NbisUsd
+            | Self::NvdaUsd
+            | Self::OrclUsd
+            | Self::PltrUsd
+            | Self::QqqUsd
+            | Self::RgtiUsd
+            | Self::RklbUsd
+            | Self::SgovUsd
+            | Self::SlvUsd
+            | Self::SndkUsd
+            | Self::SpcxUsd
+            | Self::SpyUsd
+            | Self::TslaUsd
+            | Self::TsmUsd
+            | Self::UsarUsd
+            | Self::UsoUsd => 8,
+            Self::WeethEeth
+            | Self::WstethSteth
+            | Self::SyrupusdcUsdc
+            | Self::SyrupusdtUsdt
+            | Self::SyrupUsdgUsdg => 18,
+        }
+    }
 }
 
 impl From<PriceFeed> for [u8; 20] {
@@ -139,11 +220,62 @@ impl From<PriceFeed> for [u8; 20] {
     }
 }
 
+#[cfg(feature = "stylus-sdk")]
+impl Into<Address> for PriceFeed {
+    fn into(self) -> Address {
+        Address::new(self.addr())
+    }
+}
+
+#[cfg(feature = "stylus-sdk")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ErrGetLatestRoundDataReason {
+    Revert,
+    BadRd,
+}
+
+/// Error if we didn't get a good result from Chainlink. True if we had problems decoding a
+/// valid reply. Returns the calldata in that situation.
+#[cfg(feature = "stylus-sdk")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErrGetLatestRoundData(Vec<u8>, ErrGetLatestRoundDataReason);
+
+#[cfg(feature = "stylus-sdk")]
+impl Display for ErrGetLatestRoundData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "{self:?}")
+    }
+}
+
+#[cfg(feature = "stylus-sdk")]
+impl core::error::Error for ErrGetLatestRoundData {}
+
+#[cfg(feature = "stylus-sdk")]
+pub fn get_latest_round_data<H, C>(
+    host: &H,
+    ctx: C,
+    p: PriceFeed,
+) -> Result<U256, ErrGetLatestRoundData>
+where
+    H: Host + ?Sized,
+    C: StaticCallContext,
+{
+    let rd = static_call(host, ctx, p.into(), &SEL_LATEST_ROUND_DATA).map_err(|v| match v {
+        StylusError::Revert(v) => ErrGetLatestRoundData(v, ErrGetLatestRoundDataReason::Revert),
+        _ => unimplemented!(),
+    })?;
+    U256::try_from_be_slice(&rd).ok_or(ErrGetLatestRoundData(
+        rd,
+        ErrGetLatestRoundDataReason::BadRd,
+    ))
+}
+
+#[cfg(feature = "bobcat-sdk")]
 pub fn get_latest_round_data_bool(p: PriceFeed) -> (bool, U) {
     static_call_word(p.addr(), &SEL_LATEST_ROUND_DATA, u64::MAX, 0)
 }
 
-
+#[cfg(feature = "bobcat-sdk")]
 pub fn get_latest_round_data_opt(p: PriceFeed) -> Option<U> {
     if let (true, p) = get_latest_round_data_bool(p) {
         Some(p)
