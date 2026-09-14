@@ -238,7 +238,7 @@ pub enum ErrGetLatestRoundDataReason {
 /// valid reply. Returns the calldata in that situation.
 #[cfg(feature = "stylus-sdk")]
 #[derive(Debug, Clone, PartialEq)]
-pub struct ErrGetLatestRoundData(Vec<u8>, ErrGetLatestRoundDataReason);
+pub struct ErrGetLatestRoundData(pub Vec<u8>, pub ErrGetLatestRoundDataReason);
 
 #[cfg(feature = "stylus-sdk")]
 impl Display for ErrGetLatestRoundData {
