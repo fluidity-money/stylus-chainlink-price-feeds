@@ -7,7 +7,7 @@ use bobcat_maths::U;
 use bobcat_interfaces::chainlink_price_feed::SEL_LATEST_ROUND_DATA;
 
 #[cfg(feature = "bobcat-sdk")]
-use bobcat_call::static_call_word;
+use bobcat_call::{read_return_data_slice, static_call_partial};
 
 #[cfg(feature = "stylus-sdk")]
 extern crate alloc;
@@ -31,8 +31,8 @@ pub trait ChainlinkPriceFeed {
 }
 
 pub mod robinhood {
-    use bobcat_cd::address;
     use crate::ChainlinkPriceFeed;
+    use bobcat_cd::address;
 
     #[cfg(feature = "stylus-sdk")]
     use stylus_sdk::alloy_primitives::Address;
@@ -232,16 +232,16 @@ pub mod robinhood {
     }
 
     #[cfg(feature = "stylus-sdk")]
-    impl Into<Address> for Robinhood {
-        fn into(self) -> Address {
-            Address::new(self.addr())
+    impl From<Robinhood> for Address {
+        fn from(value: Robinhood) -> Self {
+            Address::new(value.addr())
         }
     }
 }
 
 pub mod arbitrum {
-    use bobcat_cd::address;
     use crate::ChainlinkPriceFeed;
+    use bobcat_cd::address;
 
     #[cfg(feature = "stylus-sdk")]
     use stylus_sdk::alloy_primitives::Address;
@@ -391,9 +391,9 @@ pub mod arbitrum {
     }
 
     #[cfg(feature = "stylus-sdk")]
-    impl Into<Address> for Arbitrum {
-        fn into(self) -> Address {
-            Address::new(self.addr())
+    impl From<Arbitrum> for Address {
+        fn from(value: Arbitrum) -> Self {
+            Address::new(value.addr())
         }
     }
 }
@@ -421,30 +421,81 @@ impl Display for ErrGetLatestRoundData {
 #[cfg(feature = "stylus-sdk")]
 impl core::error::Error for ErrGetLatestRoundData {}
 
+const LATEST_ROUND_DATA_LEN: usize = 5 * 32;
+const ANSWER_OFFSET: usize = 32;
+
 #[cfg(feature = "stylus-sdk")]
-pub fn get_latest_round_data<H, C, P>(
-    host: &H,
-    ctx: C,
-    p: P,
-) -> Result<U256, ErrGetLatestRoundData>
+fn decode_latest_round_data(rd: &[u8]) -> Option<U256> {
+    if rd.len() != LATEST_ROUND_DATA_LEN || rd[ANSWER_OFFSET] & 0x80 != 0 {
+        return None;
+    }
+    U256::try_from_be_slice(&rd[ANSWER_OFFSET..ANSWER_OFFSET + 32])
+}
+
+#[cfg(feature = "stylus-sdk")]
+fn split_u256(price: U256, decimals: u8) -> (U256, U256) {
+    let mut scale = U256::from(1);
+    for _ in 0..decimals {
+        scale *= U256::from(10);
+    }
+    (price / scale, price % scale)
+}
+
+#[cfg(feature = "bobcat-sdk")]
+fn split_u(price: U, decimals: u8) -> (U, U) {
+    let mut scale = U::ONE;
+    for _ in 0..decimals {
+        scale *= U::from(10u8);
+    }
+    (price / scale, price % scale)
+}
+
+#[cfg(feature = "stylus-sdk")]
+pub fn get_latest_round_data<H, C, P>(host: &H, ctx: C, p: P) -> Result<U256, ErrGetLatestRoundData>
 where
     H: Host + ?Sized,
     C: StaticCallContext,
     P: ChainlinkPriceFeed,
 {
-    let rd = static_call(host, ctx, Address::new(p.addr()), &SEL_LATEST_ROUND_DATA).map_err(|v| match v {
-        StylusError::Revert(v) => ErrGetLatestRoundData(v, ErrGetLatestRoundDataReason::Revert),
-        _ => unimplemented!(),
-    })?;
-    U256::try_from_be_slice(&rd).ok_or(ErrGetLatestRoundData(
+    let rd = static_call(host, ctx, Address::new(p.addr()), &SEL_LATEST_ROUND_DATA).map_err(
+        |v| match v {
+            StylusError::Revert(v) => ErrGetLatestRoundData(v, ErrGetLatestRoundDataReason::Revert),
+            _ => unimplemented!(),
+        },
+    )?;
+    decode_latest_round_data(&rd).ok_or(ErrGetLatestRoundData(
         rd,
         ErrGetLatestRoundDataReason::BadRd,
     ))
 }
 
+/// Gets a price and splits it into `(whole, fractional)` words according to
+/// the feed's decimal precision. The fractional word is not decimal-padded;
+/// use `p.decimals()` when formatting it.
+#[cfg(feature = "stylus-sdk")]
+pub fn get_latest_round_data_split<H, C, P>(
+    host: &H,
+    ctx: C,
+    p: P,
+) -> Result<(U256, U256), ErrGetLatestRoundData>
+where
+    H: Host + ?Sized,
+    C: StaticCallContext,
+    P: ChainlinkPriceFeed + Copy,
+{
+    let decimals = p.decimals();
+    get_latest_round_data(host, ctx, p).map(|price| split_u256(price, decimals))
+}
+
 #[cfg(feature = "bobcat-sdk")]
 pub fn get_latest_round_data_bool<P: ChainlinkPriceFeed>(p: P) -> (bool, U) {
-    static_call_word(p.addr(), &SEL_LATEST_ROUND_DATA, u64::MAX, 0)
+    let (success, len) = static_call_partial(p.addr(), &SEL_LATEST_ROUND_DATA, u64::MAX);
+    if !success || len != LATEST_ROUND_DATA_LEN {
+        return (false, U::ZERO);
+    }
+    let (word, bytes_read) = read_return_data_slice::<32>(ANSWER_OFFSET, 32);
+    let positive = word[0] & 0x80 == 0;
+    (bytes_read == 32 && positive, U::from(word))
 }
 
 #[cfg(feature = "bobcat-sdk")]
@@ -453,5 +504,54 @@ pub fn get_latest_round_data_opt<P: ChainlinkPriceFeed>(p: P) -> Option<U> {
         Some(p)
     } else {
         None
+    }
+}
+
+/// Gets a price and splits it into `(whole, fractional)` words according to
+/// the feed's decimal precision.
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_latest_round_data_split_bool<P: ChainlinkPriceFeed + Copy>(p: P) -> (bool, (U, U)) {
+    let decimals = p.decimals();
+    let (success, price) = get_latest_round_data_bool(p);
+    (success, split_u(price, decimals))
+}
+
+/// Gets a price and splits it into `(whole, fractional)` words according to
+/// the feed's decimal precision.
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_latest_round_data_split_opt<P: ChainlinkPriceFeed + Copy>(p: P) -> Option<(U, U)> {
+    let decimals = p.decimals();
+    get_latest_round_data_opt(p).map(|price| split_u(price, decimals))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "stylus-sdk")]
+    use super::{decode_latest_round_data, split_u256};
+    #[cfg(feature = "stylus-sdk")]
+    use stylus_sdk::alloy_primitives::U256;
+
+    #[cfg(feature = "stylus-sdk")]
+    #[test]
+    fn decodes_answer_word_from_latest_round_data_tuple() {
+        let mut rd = [0u8; 160];
+        rd[31] = 7; // roundId; must not be returned as the price
+        rd[56..64].copy_from_slice(&123_456_789u64.to_be_bytes());
+
+        assert_eq!(
+            decode_latest_round_data(&rd),
+            Some(U256::from(123_456_789u64))
+        );
+        assert_eq!(decode_latest_round_data(&rd[..159]), None);
+    }
+
+    #[cfg(feature = "stylus-sdk")]
+    #[test]
+    fn splits_stylus_price_at_feed_decimals() {
+        assert_eq!(
+            split_u256(U256::from(123_000_004u64), 8),
+            (U256::from(1), U256::from(23_000_004u64))
+        );
+        assert_eq!(split_u256(U256::from(42), 0), (U256::from(42), U256::ZERO));
     }
 }
