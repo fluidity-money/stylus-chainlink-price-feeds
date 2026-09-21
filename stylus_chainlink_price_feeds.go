@@ -8,3 +8,4 @@ import (
 var abiB []byte
 
 var abi, _ = ethAbi.JSON(bytes.NewReader(abiB))
+
