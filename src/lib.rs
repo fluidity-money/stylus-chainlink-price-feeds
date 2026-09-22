@@ -6,6 +6,8 @@ use bobcat_maths::U;
 #[allow(unused)]
 use bobcat_interfaces::chainlink_price_feed::SEL_LATEST_ROUND_DATA;
 
+use bobcat_cd::const_keccak_sel;
+
 #[cfg(feature = "bobcat-sdk")]
 use bobcat_call::{read_return_data_slice, static_call_partial};
 
@@ -28,6 +30,10 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 pub trait ChainlinkPriceFeed {
     fn addr(self) -> [u8; 20];
     fn decimals(self) -> u8;
+
+    fn price_history_addr(&self) -> [u8; 20] {
+        [0u8; 20]
+    }
 }
 
 pub mod robinhood {
@@ -36,6 +42,8 @@ pub mod robinhood {
 
     #[cfg(feature = "stylus-sdk")]
     use stylus_sdk::alloy_primitives::Address;
+
+    pub const PRICE_HISTORY_ADDR: [u8; 20] = address!(b"6fbdab0399D6bCf1af1FFa1348E663622a16A9E9");
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Robinhood {
@@ -222,6 +230,10 @@ pub mod robinhood {
                 | Self::SyrupUsdgUsdg => 18,
             }
         }
+
+        fn price_history_addr(&self) -> [u8; 20] {
+            PRICE_HISTORY_ADDR
+        }
     }
 
     #[cfg(feature = "stylus-sdk")]
@@ -245,6 +257,8 @@ pub mod arbitrum {
 
     #[cfg(feature = "stylus-sdk")]
     use stylus_sdk::alloy_primitives::Address;
+
+    pub const PRICE_HISTORY_ADDR: [u8; 20] = address!(b"33fff27761204ffA52c58A750CE0aeB720d4e4D9");
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Arbitrum {
@@ -381,6 +395,10 @@ pub mod arbitrum {
                 | Self::EurcUsd => 18,
             }
         }
+
+        fn price_history_addr(&self) -> [u8; 20] {
+            PRICE_HISTORY_ADDR
+        }
     }
 
     #[cfg(feature = "stylus-sdk")]
@@ -423,6 +441,17 @@ impl core::error::Error for ErrGetLatestRoundData {}
 
 const LATEST_ROUND_DATA_LEN: usize = 5 * 32;
 const ANSWER_OFFSET: usize = 32;
+const PRICE_AT_RETURNDATA_LEN: usize = 6 * 32;
+const PRICE_AT_ANSWER_OFFSET: usize = 3 * 32;
+const SEL_PRICE_AT: [u8; 4] = const_keccak_sel(b"priceAt(address,uint64)");
+
+fn make_price_at_calldata<P: ChainlinkPriceFeed>(p: P, timestamp: u64) -> [u8; 4 + 32 * 2] {
+    let mut calldata = [0u8; 4 + 32 * 2];
+    calldata[..4].copy_from_slice(&SEL_PRICE_AT);
+    calldata[4 + 12..4 + 32].copy_from_slice(&p.addr());
+    calldata[4 + 32 + 24..].copy_from_slice(&timestamp.to_be_bytes());
+    calldata
+}
 
 #[cfg(feature = "stylus-sdk")]
 fn decode_latest_round_data(rd: &[u8]) -> Option<U256> {
@@ -430,6 +459,14 @@ fn decode_latest_round_data(rd: &[u8]) -> Option<U256> {
         return None;
     }
     U256::try_from_be_slice(&rd[ANSWER_OFFSET..ANSWER_OFFSET + 32])
+}
+
+#[cfg(feature = "stylus-sdk")]
+fn decode_price_at(rd: &[u8]) -> Option<U256> {
+    if rd.len() != PRICE_AT_RETURNDATA_LEN || rd[PRICE_AT_ANSWER_OFFSET] & 0x80 != 0 {
+        return None;
+    }
+    U256::try_from_be_slice(&rd[PRICE_AT_ANSWER_OFFSET..PRICE_AT_ANSWER_OFFSET + 32])
 }
 
 #[cfg(feature = "stylus-sdk")]
@@ -487,6 +524,50 @@ where
     get_latest_round_data(host, ctx, p).map(|price| split_u256(price, decimals))
 }
 
+/// Calls a deployed `ChainlinkPriceHistory` helper and returns the raw,
+/// non-negative Chainlink answer published at or immediately before `timestamp`.
+#[cfg(feature = "stylus-sdk")]
+pub fn get_price_at<H, C, P>(
+    host: &H,
+    ctx: C,
+    p: P,
+    timestamp: u64,
+) -> Result<U256, ErrGetLatestRoundData>
+where
+    H: Host + ?Sized,
+    C: StaticCallContext,
+    P: ChainlinkPriceFeed,
+{
+    let history = p.price_history_addr();
+    let calldata = make_price_at_calldata(p, timestamp);
+    let rd = static_call(host, ctx, Address::new(history), &calldata).map_err(|v| match v {
+        StylusError::Revert(v) => ErrGetLatestRoundData(v, ErrGetLatestRoundDataReason::Revert),
+        _ => unimplemented!(),
+    })?;
+    decode_price_at(&rd).ok_or(ErrGetLatestRoundData(
+        rd,
+        ErrGetLatestRoundDataReason::BadRd,
+    ))
+}
+
+/// Calls a deployed `ChainlinkPriceHistory` helper and splits its answer into
+/// `(whole, fractional)` words according to the feed's decimal precision.
+#[cfg(feature = "stylus-sdk")]
+pub fn get_price_at_split<H, C, P>(
+    host: &H,
+    ctx: C,
+    p: P,
+    timestamp: u64,
+) -> Result<(U256, U256), ErrGetLatestRoundData>
+where
+    H: Host + ?Sized,
+    C: StaticCallContext,
+    P: ChainlinkPriceFeed + Copy,
+{
+    let decimals = p.decimals();
+    get_price_at(host, ctx, p, timestamp).map(|price| split_u256(price, decimals))
+}
+
 #[cfg(feature = "bobcat-sdk")]
 pub fn get_latest_round_data_bool<P: ChainlinkPriceFeed>(p: P) -> (bool, U) {
     let (success, len) = static_call_partial(p.addr(), &SEL_LATEST_ROUND_DATA, u64::MAX);
@@ -502,6 +583,30 @@ pub fn get_latest_round_data_bool<P: ChainlinkPriceFeed>(p: P) -> (bool, U) {
 pub fn get_latest_round_data_opt<P: ChainlinkPriceFeed>(p: P) -> Option<U> {
     if let (true, p) = get_latest_round_data_bool(p) {
         Some(p)
+    } else {
+        None
+    }
+}
+
+/// Calls a deployed `ChainlinkPriceHistory` helper and returns the raw,
+/// non-negative Chainlink answer published at or immediately before `timestamp`.
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_price_at_bool<P: ChainlinkPriceFeed>(p: P, timestamp: u64) -> (bool, U) {
+    let history = p.price_history_addr();
+    let calldata = make_price_at_calldata(p, timestamp);
+    let (success, len) = static_call_partial(history, &calldata, u64::MAX);
+    if !success || len != PRICE_AT_RETURNDATA_LEN {
+        return (false, U::ZERO);
+    }
+    let (word, bytes_read) = read_return_data_slice::<32>(PRICE_AT_ANSWER_OFFSET, 32);
+    let positive = word[0] & 0x80 == 0;
+    (bytes_read == 32 && positive, U::from(word))
+}
+
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_price_at_opt<P: ChainlinkPriceFeed>(p: P, timestamp: u64) -> Option<U> {
+    if let (true, price) = get_price_at_bool(p, timestamp) {
+        Some(price)
     } else {
         None
     }
@@ -524,12 +629,66 @@ pub fn get_latest_round_data_split_opt<P: ChainlinkPriceFeed + Copy>(p: P) -> Op
     get_latest_round_data_opt(p).map(|price| split_u(price, decimals))
 }
 
+/// Calls a deployed `ChainlinkPriceHistory` helper and splits its answer into
+/// `(whole, fractional)` words according to the feed's decimal precision.
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_price_at_split_bool<P: ChainlinkPriceFeed + Copy>(
+    p: P,
+    timestamp: u64,
+) -> (bool, (U, U)) {
+    let decimals = p.decimals();
+    let (success, price) = get_price_at_bool(p, timestamp);
+    (success, split_u(price, decimals))
+}
+
+/// Calls a deployed `ChainlinkPriceHistory` helper and splits its answer into
+/// `(whole, fractional)` words according to the feed's decimal precision.
+#[cfg(feature = "bobcat-sdk")]
+pub fn get_price_at_split_opt<P: ChainlinkPriceFeed + Copy>(
+    p: P,
+    timestamp: u64,
+) -> Option<(U, U)> {
+    let decimals = p.decimals();
+    get_price_at_opt(p, timestamp).map(|price| split_u(price, decimals))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{ChainlinkPriceFeed, SEL_PRICE_AT, make_price_at_calldata};
     #[cfg(feature = "stylus-sdk")]
-    use super::{decode_latest_round_data, split_u256};
+    use super::{decode_latest_round_data, decode_price_at, split_u256};
     #[cfg(feature = "stylus-sdk")]
     use stylus_sdk::alloy_primitives::U256;
+
+    #[derive(Clone, Copy)]
+    struct TestFeed;
+
+    impl ChainlinkPriceFeed for TestFeed {
+        fn addr(self) -> [u8; 20] {
+            [0xabu8; 20]
+        }
+
+        fn decimals(self) -> u8 {
+            8
+        }
+
+        fn price_history_addr(&self) -> [u8; 20] {
+            [0xcdu8; 20]
+        }
+    }
+
+    #[test]
+    fn encodes_price_at_with_u64_timestamp() {
+        let timestamp = 0x0102_0304_0506_0708;
+        let calldata = make_price_at_calldata(TestFeed, timestamp);
+
+        assert_eq!(SEL_PRICE_AT, [0x84, 0x46, 0xb0, 0x0e]);
+        assert_eq!(&calldata[..4], &SEL_PRICE_AT);
+        assert_eq!(&calldata[4..16], &[0u8; 12]);
+        assert_eq!(&calldata[16..36], &[0xabu8; 20]);
+        assert_eq!(&calldata[36..60], &[0u8; 24]);
+        assert_eq!(&calldata[60..68], &timestamp.to_be_bytes());
+    }
 
     #[cfg(feature = "stylus-sdk")]
     #[test]
@@ -543,6 +702,19 @@ mod tests {
             Some(U256::from(123_456_789u64))
         );
         assert_eq!(decode_latest_round_data(&rd[..159]), None);
+    }
+
+    #[cfg(feature = "stylus-sdk")]
+    #[test]
+    fn decodes_answer_word_from_price_at_tuple() {
+        let mut rd = [0u8; 192];
+        rd[120..128].copy_from_slice(&123_456_789u64.to_be_bytes());
+
+        assert_eq!(decode_price_at(&rd), Some(U256::from(123_456_789u64)));
+        assert_eq!(decode_price_at(&rd[..191]), None);
+
+        rd[96] = 0x80;
+        assert_eq!(decode_price_at(&rd), None);
     }
 
     #[cfg(feature = "stylus-sdk")]

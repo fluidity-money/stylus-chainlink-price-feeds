@@ -40,3 +40,26 @@ let (success, (whole, fractional)) =
 
 let price = get_latest_round_data_split_opt(Arbitrum::BtcUsd);
 ```
+
+## Getting a historical price
+
+With stylus-sdk:
+
+```rust
+use stylus_chainlink_price_feeds::{arbitrum::Arbitrum, get_price_at};
+
+let price = get_price_at(
+    self.vm(),
+    Call::new(),
+    Arbitrum::BtcUsd,
+    timestamp,
+)?;
+```
+
+With bobcat-sdk:
+
+```rust
+use stylus_chainlink_price_feeds::{arbitrum::Arbitrum, get_price_at_opt};
+
+let price = get_price_at_opt(Arbitrum::BtcUsd, timestamp);
+```

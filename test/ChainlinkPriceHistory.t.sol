@@ -88,7 +88,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
             }
 
             ChainlinkPriceHistory.Round memory actual =
-                hist.priceAt(IChainlinkFeed(BTCUSD), ts);
+                hist.priceAt(IChainlinkFeed(BTCUSD), uint64(ts));
             ChainlinkPriceHistory.Round memory oracle = _linearOracle(ts);
 
             assertEq(actual.proxyRoundId, oracle.proxyRoundId, "proxyRoundId vs oracle");
@@ -108,7 +108,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
         (, , , uint256 upd, ) = _round(a);
 
         ChainlinkPriceHistory.Round memory actual =
-            hist.priceAt(IChainlinkFeed(BTCUSD), upd);
+            hist.priceAt(IChainlinkFeed(BTCUSD), uint64(upd));
         ChainlinkPriceHistory.Round memory oracle = _linearOracle(upd);
 
         assertEq(actual.proxyRoundId, oracle.proxyRoundId, "proxyRoundId vs oracle");
@@ -129,7 +129,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
 
             // (a) ts exactly at the anchor round's publish time -> returns it.
             ChainlinkPriceHistory.Round memory at =
-                hist.priceAt(IChainlinkFeed(BTCUSD), upd);
+                hist.priceAt(IChainlinkFeed(BTCUSD), uint64(upd));
             assertEq(at.aggregatorRoundId, uint64(a), "anchor round not returned at exact ts");
             assertEq(at.updatedAt, upd, "anchor updatedAt mismatch");
 
@@ -140,11 +140,11 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
                     vm.expectRevert(
                         abi.encodeWithSelector(ChainlinkPriceHistory.BeforeHistory.selector, upd - 1)
                     );
-                    hist.priceAt(IChainlinkFeed(BTCUSD), upd - 1);
+                    hist.priceAt(IChainlinkFeed(BTCUSD), uint64(upd - 1));
                 }
             } else {
                 ChainlinkPriceHistory.Round memory before =
-                    hist.priceAt(IChainlinkFeed(BTCUSD), upd - 1);
+                    hist.priceAt(IChainlinkFeed(BTCUSD), uint64(upd - 1));
                 // Must be the previous aggregator round (no gap below a real round).
                 assertEq(before.aggregatorRoundId, uint64(a - 1), "before-anchor round mismatch");
                 assertLt(before.updatedAt, upd, "monotonicity violated before-anchor");
@@ -156,7 +156,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
     ///         returns for block.timestamp (the fork's current time).
     function test_latestRoundIsReturnedForNow() public {
         ChainlinkPriceHistory.Round memory r =
-            hist.priceAt(IChainlinkFeed(BTCUSD), block.timestamp);
+            hist.priceAt(IChainlinkFeed(BTCUSD), uint64(block.timestamp));
         assertEq(r.proxyRoundId, latestRid, "latest round not returned for now");
         assertEq(r.updatedAt, latestUpdated, "latest updatedAt mismatch");
     }
@@ -169,7 +169,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
                 firstUpdated - 1
             )
         );
-        hist.priceAt(IChainlinkFeed(BTCUSD), firstUpdated - 1);
+        hist.priceAt(IChainlinkFeed(BTCUSD), uint64(firstUpdated - 1));
     }
 
     // ------------------------------------------------------- discrepancy report
@@ -197,7 +197,7 @@ contract ChainlinkPriceHistoryFuzzTest is Test {
             if (ts > aUpd) ts = aUpd;
 
             ChainlinkPriceHistory.Round memory r =
-                hist.priceAt(IChainlinkFeed(BTCUSD), ts);
+                hist.priceAt(IChainlinkFeed(BTCUSD), uint64(ts));
 
             uint256 delta = ts > r.updatedAt ? ts - r.updatedAt : 0;
             if (delta > maxDelta) maxDelta = delta;

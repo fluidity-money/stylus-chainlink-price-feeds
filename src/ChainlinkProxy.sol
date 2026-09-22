@@ -46,14 +46,14 @@ contract ChainlinkPriceHistory {
         uint256 updatedAt;        // when the answer was published — compare against target
     }
 
-    error BeforeHistory(uint256 requestedAt);
+    error BeforeHistory(uint64 requestedAt);
 
     /// @notice Return the round whose answer was published at or before `target`.
     /// @dev    Handles aggregator-upgrade phase jumps by walking phases backwards.
     /// @param  feed   The chainlink AggregatorV3 proxy address.
     /// @param  target Unix timestamp (seconds).
     /// @return round  The active round: proxyRoundId, price, and timestamps.
-    function priceAt(IChainlinkFeed feed, uint256 target)
+    function priceAt(IChainlinkFeed feed, uint64 target)
         external
         view
         returns (Round memory round)
